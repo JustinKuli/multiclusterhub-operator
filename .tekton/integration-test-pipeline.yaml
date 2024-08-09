@@ -90,9 +90,9 @@ spec:
               #!/usr/bin/env bash
               set -euo pipefail
               
-              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'",\
-               "successes": 0, "failures": 0, "warnings": 0,\
-               "note": "'"$(tasks.setup.results.SKIP_NOTE)"'"}'
+              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'", '
+              res+='"successes": 0, "failures": 0, "warnings": 0, '
+              res+='"note": "$(tasks.setup.results.SKIP_NOTE)"}'
               echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
     - name: finish-cleanup
       when:
@@ -108,9 +108,9 @@ spec:
               #!/usr/bin/env bash
               set -euo pipefail
               
-              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'",\
-               "successes": 1, "failures": 0, "warnings": 0,\
-               "note": "I\'m making a note here: huge success"}'
+              res='{"result": "SUCCESS", "timestamp": "'$(date -u --iso-8601=seconds)'", '
+              res+='"successes": 0, "failures": 0, "warnings": 0, '
+              res+='"note": "I'"'"'m making a note here: huge success"}'
               echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
 
               oc delete lease -n default konflux-integration-lock
