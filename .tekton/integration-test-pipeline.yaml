@@ -6,10 +6,24 @@ spec:
   params:
     - description: 'Snapshot of the application'
       name: SNAPSHOT
-      default: '{"components": [{"name":"test-app", "containerImage": "quay.io/example/repo:latest"}]}'
+      default: |
+        {
+          "application": "release-acm-211",
+          "components": [{
+            "name": "config-policy-controller-acm-211",
+            "containerImage": "quay.io/redhat-user-workloads/crt-redhat-acm-tenant/release-acm-211/config-policy-controller-acm-211@sha256:4a28d4e8f2409815a9abc691408d6f75afbee04064ea2524d6c06f12e65ec93e",
+            "source": {
+              "git": {
+                "url": "https://github.com/stolostron/config-policy-controller",
+                "revision": "1082f5e293acc33c656ae8d136d76f4c0f7eef89"
+              }
+            }
+          }],
+          "artifacts": {}
+        }
       type: string
   tasks:
-    - name: task-1
+    - name: setup
       params:
         - name: SNAPSHOT
           value: $(params.SNAPSHOT)
@@ -17,8 +31,7 @@ spec:
         params:
           - name: SNAPSHOT
         results:
-          - name: TEST_OUTPUT
-            description: Test output
+          - name: SKIP_NOTE
         steps:
           - image: registry.redhat.io/openshift4/ose-cli:latest
             env:
@@ -36,19 +49,68 @@ spec:
                     key: password
             script: |
               #!/usr/bin/env bash
-              set -euo pipefail
-              
-              dnf -y install jq
-
-              echo -e "Example test task for the Snapshot:\n ${SNAPSHOT}"
-              # Run custom tests for the given Snapshot here
-              # After the tests finish, record the overall result in the RESULT variable
-              RESULT="SUCCESS"
-
-              # Output the standardized TEST_OUTPUT result in JSON form
-              TEST_OUTPUT=$(jq -rc --arg date $(date -u --iso-8601=seconds) --arg RESULT "${RESULT}" --null-input \
-                '{result: $RESULT, timestamp: $date, failures: 0, successes: 1, warnings: 0}')
-              echo -n "${TEST_OUTPUT}" | tee $(results.TEST_OUTPUT.path)
+              set -u # no "-e" or "-o pipefail", for now
 
               oc login "${OCP_API_URL}" -u kubeadmin -p "${OCP_PASSWORD}" --insecure-skip-tls-verify=true
-              oc get ns
+              
+              if (( $? != 0 )); then
+                echo -n "Could not log in to cluster" | tee $(results.SKIP_NOTE.path)
+                exit 0
+              fi
+
+              oc create -f - <<EOF
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: konflux-integration-lock
+                namespace: default
+              EOF
+
+              if (( $? != 0 )); then
+                echo -n "The test cluster is already in use" | tee $(results.SKIP_NOTE.path)
+                exit 0
+              fi
+
+              echo -n "" | tee $(results.SKIP_NOTE.path)
+
+              set -eo pipefail
+              echo "... what now?"
+  finally:
+    - name: finish-skip
+      when:
+        - input: $(tasks.setup.results.SKIP_NOTE)
+          operator: notin
+          values: [""]
+      taskSpec:
+        results:
+          - name: TEST_OUTPUT
+        steps:
+          - image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              
+              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'",\
+               "successes": 0, "failures": 0, "warnings": 0,\
+               "note": "'"$(tasks.setup.results.SKIP_NOTE)"'"}'
+              echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
+    - name: finish-cleanup
+      when:
+        - input: $(tasks.setup.results.SKIP_NOTE)
+          operator: in
+          values: [""]
+      taskSpec:
+        results:
+          - name: TEST_OUTPUT
+        steps:
+          - image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              
+              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'",\
+               "successes": 1, "failures": 0, "warnings": 0,\
+               "note": "I\'m making a note here: huge success"}'
+              echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
+
+              oc delete lease -n default konflux-integration-lock
