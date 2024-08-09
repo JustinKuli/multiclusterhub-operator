@@ -104,10 +104,23 @@ spec:
           - name: TEST_OUTPUT
         steps:
           - image: registry.redhat.io/openshift4/ose-cli:latest
+            env:
+              - name: OCP_API_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: jkuli-test-secret
+                    key: api_url
+              - name: OCP_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: jkuli-test-secret
+                    key: password
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
               
+              oc login "${OCP_API_URL}" -u kubeadmin -p "${OCP_PASSWORD}" --insecure-skip-tls-verify=true
+
               res='{"result": "SUCCESS", "timestamp": "'$(date -u --iso-8601=seconds)'", '
               res+='"successes": 0, "failures": 0, "warnings": 0, '
               res+='"note": "I'"'"'m making a note here: huge success"}'
