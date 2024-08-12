@@ -19,6 +19,8 @@ metadata:
     certified: "false"
     createdAt: "2024-05-09T18:31:39Z"
     description: Open management of Openshift and Kubernetes clusters
+    operatorframework.io/initialization-resource: '{"apiVersion":"operator.open-cluster-management.io/v1", "kind":"MultiClusterHub","metadata":{"name":"multiclusterhub","namespace":"open-cluster-management"}, "spec": {}}'
+    operatorframework.io/suggested-namespace: open-cluster-management
     operators.operatorframework.io/builder: operator-sdk-v1.34.1
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v3
     repository: https://github.com/open-cluster-management/multiclusterhub-operator
@@ -1953,6 +1955,10 @@ spec:
                         valueFrom:
                           fieldRef:
                             fieldPath: metadata.namespace
+                      - name: OPERATOR_VERSION
+                        value: 2.11.999
+                      - name: OPERATOR_PACKAGE
+                        value: open-cluster-management
                     image: quay.io/stolostron/multiclusterhub-operator:0.0.1
                     imagePullPolicy: IfNotPresent
                     livenessProbe:
