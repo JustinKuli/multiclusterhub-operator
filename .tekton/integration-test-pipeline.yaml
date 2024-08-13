@@ -32,6 +32,10 @@ spec:
           - name: SNAPSHOT
         results:
           - name: SKIP_NOTE
+        volumes:
+          - name: "jkuli-test-cm"
+            configMap:
+              name: "jkuli-test-cm"
         steps:
           - image: registry.redhat.io/openshift4/ose-cli:latest
             env:
@@ -47,6 +51,9 @@ spec:
                   secretKeyRef:
                     name: jkuli-test-secret
                     key: password
+            volumeMounts:
+              - name: "jkuli-test-cm"
+                mountPath: "/tmp/vol"
             script: |
               #!/usr/bin/env bash
               set -u # no "-e" or "-o pipefail", for now
@@ -74,7 +81,16 @@ spec:
               echo -n "" | tee $(results.SKIP_NOTE.path)
 
               set -eo pipefail
-              echo "... what now?"
+
+              echo "cloning multiclusterhub-operator repository"
+              dnf -y install git
+              git clone https://github.com/JustinKuli/multiclusterhub-operator.git
+              cd multiclusterhub-operator/
+              git checkout 2.11-integration-test
+              
+              cd hack/scripts
+              ./integration-setup.sh
+
   finally:
     - name: finish-skip
       when:
@@ -94,6 +110,7 @@ spec:
               res+='"successes": 0, "failures": 0, "warnings": 0, '
               res+='"note": "$(tasks.setup.results.SKIP_NOTE)"}'
               echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
+              echo ""
     - name: finish-cleanup
       when:
         - input: $(tasks.setup.results.SKIP_NOTE)
@@ -125,5 +142,6 @@ spec:
               res+='"successes": 0, "failures": 0, "warnings": 0, '
               res+='"note": "I'"'"'m making a note here: huge success"}'
               echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
+              echo ""
 
               oc delete lease -n default konflux-integration-lock
