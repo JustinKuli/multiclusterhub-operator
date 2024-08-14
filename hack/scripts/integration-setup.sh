@@ -16,7 +16,7 @@ fi
 echo "${SNAPSHOT}" > snapshot.json
 
 csvPath='../../bundle/manifests/multiclusterhub-operator.clusterserviceversion.yaml'
-containerEnvPath='.spec.install.spec.deployments[0].spec.template.spec.containers[0].env'
+containerPath='.spec.install.spec.deployments[0].spec.template.spec.containers[0]'
 imgCfgPath='/tmp/vol/image-config.yaml'
 
 yq -i '.spec.relatedImages = []' "${csvPath}"
@@ -34,11 +34,15 @@ for kebabName in $(yq -o=yaml 'keys | .[]' "${imgCfgPath}"); do
         echo "Using default image for ${kebabName}"
     fi
 
-    newEnv="{\"name\": \"OPERAND_IMAGE_${bigName}\", \"value\": \"${image}\"}"
-    yq -i "${containerEnvPath} += ${newEnv}" "${csvPath}"
+    if [[ "${kebabName}" == "multiclusterhub-operator" ]]; then
+        yq -i "${containerPath}.image = \"${image}\"" "${csvPath}"
+    else
+        newEnv="{\"name\": \"OPERAND_IMAGE_${bigName}\", \"value\": \"${image}\"}"
+        yq -i "${containerPath}.env += ${newEnv}" "${csvPath}"
 
-    newRelatedImg="{\"name\": \"${snakeName}\", \"image\": \"${image}\"}"
-    yq -i ".spec.relatedImages += ${newRelatedImg}" "${csvPath}"
+        newRelatedImg="{\"name\": \"${snakeName}\", \"image\": \"${image}\"}"
+        yq -i ".spec.relatedImages += ${newRelatedImg}" "${csvPath}"
+    fi
 done
 
 cat "${csvPath}"
