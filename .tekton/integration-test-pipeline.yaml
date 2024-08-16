@@ -23,125 +23,147 @@ spec:
         }
       type: string
   tasks:
-    - name: setup
-      params:
-        - name: SNAPSHOT
-          value: $(params.SNAPSHOT)
+    - name: provision-eaas-space
+      # Based on https://github.com/konflux-ci/build-definitions/blob/21db0a06facdaf3cb5255e83bc9eeaead303465b/task/eaas-provision-space/0.1/eaas-provision-space.yaml
+      # but using direct tekton variable substitutions because I live dangerously
       taskSpec:
-        params:
-          - name: SNAPSHOT
         results:
-          - name: SKIP_NOTE
-        volumes:
-          - name: "jkuli-test-cm"
-            configMap:
-              name: "jkuli-test-cm"
+          - name: secretRef
+            description: Name of a Secret containing a kubeconfig used to access the provisioned space.
         steps:
           - image: registry.redhat.io/openshift4/ose-cli:latest
-            env:
-              - name: SNAPSHOT
-                value: $(params.SNAPSHOT)
-              - name: OCP_API_URL
-                valueFrom:
-                  secretKeyRef:
-                    name: jkuli-test-secret
-                    key: api_url
-              - name: OCP_PASSWORD
-                valueFrom:
-                  secretKeyRef:
-                    name: jkuli-test-secret
-                    key: password
-            volumeMounts:
-              - name: "jkuli-test-cm"
-                mountPath: "/tmp/vol"
             script: |
               #!/usr/bin/env bash
-              set -u # no "-e" or "-o pipefail", for now
+              set -euo pipefail
 
-              oc login "${OCP_API_URL}" -u kubeadmin -p "${OCP_PASSWORD}" --insecure-skip-tls-verify=true
-              
-              if (( $? != 0 )); then
-                echo -n "Could not log in to cluster" | tee $(results.SKIP_NOTE.path)
-                exit 0
-              fi
-
-              oc create -f - <<EOF
-              apiVersion: coordination.k8s.io/v1
-              kind: Lease
+              cat <<EOF > space_request.yaml
+              apiVersion: toolchain.dev.openshift.com/v1alpha1
+              kind: SpaceRequest
               metadata:
-                name: konflux-integration-lock
-                namespace: default
+                generateName: eaas-spacerequest-
+                namespace: "$(context.taskRun.namespace)"
+                ownerReferences:
+                - apiVersion: tekton.dev/v1
+                  kind: PipelineRun
+                  name: "$(context.pipelineRun.name)"
+                  uid: "$(context.pipelineRun.uid)"
+              spec:
+                tierName: konflux-eaas
+                targetClusterRoles:
+                - cluster-role.toolchain.dev.openshift.com/eaas
               EOF
 
-              if (( $? != 0 )); then
-                echo -n "The test cluster is already in use" | tee $(results.SKIP_NOTE.path)
-                exit 0
+              cat space_request.yaml
+
+              NAME=$(oc create -f space_request.yaml -o=jsonpath='{.metadata.name}')
+
+              echo "Waiting for SpaceRequest ${NAME} to be ready"
+              if oc wait spacerequests $NAME --for=condition=Ready --timeout=5m; then
+                echo "Got secretRef"
+                oc get spacerequests $NAME -o=jsonpath='{.status.namespaceAccess[0].secretRef}' | tee $(results.secretRef.path)
+              else
+                exit 1
               fi
-
-              echo -n "" | tee $(results.SKIP_NOTE.path)
-
-              set -eo pipefail
-
-              echo "cloning multiclusterhub-operator repository"
-              dnf -y install git
-              git clone https://github.com/JustinKuli/multiclusterhub-operator.git
-              cd multiclusterhub-operator/
-              git checkout 2.11-integration-test
-              
-              cd hack/scripts
-              ./integration-setup.sh
-
-  finally:
-    - name: finish-skip
-      when:
-        - input: $(tasks.setup.results.SKIP_NOTE)
-          operator: notin
-          values: [""]
+    - name: provision-cluster
+      # Based on https://github.com/konflux-ci/build-definitions/tree/21db0a06facdaf3cb5255e83bc9eeaead303465b/stepactions
+      # but in one simpler step
+      params:
+        - name: OCP_VERSION_PREFIX
+          value: '4.15.'
+        - name: eaas-secretref
+          value: $(tasks.provision-eaas-space.results.secretRef)
       taskSpec:
+        params:
+          - name: OCP_VERSION_PREFIX
+          - name: eaas-secretref
         results:
-          - name: TEST_OUTPUT
-        steps:
-          - image: registry.redhat.io/openshift4/ose-cli:latest
-            script: |
-              #!/usr/bin/env bash
-              set -euo pipefail
-              
-              res='{"result": "SKIPPED", "timestamp": "'$(date -u --iso-8601=seconds)'", '
-              res+='"successes": 0, "failures": 0, "warnings": 0, '
-              res+='"note": "$(tasks.setup.results.SKIP_NOTE)"}'
-              echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
-              echo ""
-    - name: finish-cleanup
-      when:
-        - input: $(tasks.setup.results.SKIP_NOTE)
-          operator: in
-          values: [""]
-      taskSpec:
-        results:
-          - name: TEST_OUTPUT
+          - name: clusterName
+            description: The name of the generated ClusterTemplateInstance resource.
+        volumes:
+          - name: eaas-kubeconfig
+            secret:
+              secretName: $(params.eaas-secretref)
         steps:
           - image: registry.redhat.io/openshift4/ose-cli:latest
             env:
-              - name: OCP_API_URL
-                valueFrom:
-                  secretKeyRef:
-                    name: jkuli-test-secret
-                    key: api_url
-              - name: OCP_PASSWORD
-                valueFrom:
-                  secretKeyRef:
-                    name: jkuli-test-secret
-                    key: password
+              - name: KUBECONFIG
+                value: /tmp/eaas-kubeconfig/kubeconfig
+            volumeMounts:
+              - name: eaas-kubeconfig
+                mountPath: /tmp/eaas-kubeconfig
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
+
+              dnf -y install jq
+
+              URL="https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest?prefix=$(params.OCP_VERSION_PREFIX)"
+              VERSION=$(curl -f -s -L -H "Accepts: application/json" "${URL}" | jq -j '.name')
+
+              cat <<EOF > cti.yaml
+              apiVersion: clustertemplate.openshift.io/v1alpha1
+              kind: ClusterTemplateInstance
+              metadata:
+                generateName: cluster-
+              spec:
+                clusterTemplateRef: hypershift-aws-cluster
+                parameters:
+                  - name: instanceType
+                    value: m6g.large
+                  - name: version
+                    value: ${VERSION}
+                  - name: timeout
+                    value: 30m
+              EOF
+
+              cat cti.yaml
+
+              CTI_NAME=$(oc create -f cti.yaml -o=jsonpath='{.metadata.name}')
+
+              echo "Waiting for ClusterTemplateInstance ${CTI_NAME} to be ready"
+              if oc wait cti "${CTI_NAME}" --for=jsonpath='{.status.phase}'=Ready --timeout=30m; then
+                echo "Successfully provisioned ${CTI_NAME}"
+              else
+                echo "Failed to provision ${CTI_NAME}"
+                oc get cti "${CTI_NAME}" -o yaml
+                exit 1
+              fi
+
+              echo -n "${CTI_NAME}" > $(results.clusterName.path)
+    - name: check-cluster-connection
+      params:
+        - name: clusterName
+          value: $(tasks.provision-cluster.results.clusterName)
+        - name: eaas-secretref
+          value: $(tasks.provision-eaas-space.results.secretRef)
+      taskSpec:
+        params:
+          - name: clusterName
+          - name: eaas-secretref
+        volumes:
+          - name: eaas-kubeconfig
+            secret:
+              secretName: $(params.eaas-secretref)
+        steps:
+          - image: registry.redhat.io/openshift4/ose-cli:latest
+            volumeMounts:
+              - name: eaas-kubeconfig
+                mountPath: /tmp/eaas-kubeconfig
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+
+              # We will switch to provisioned cluster kubeconfig later
+              export KUBECONFIG=/tmp/eaas-kubeconfig/kubeconfig
               
-              oc login "${OCP_API_URL}" -u kubeadmin -p "${OCP_PASSWORD}" --insecure-skip-tls-verify=true
+              cti_name="$(tasks.provision-cluster.results.clusterName)"
+              SECRET_NAME=$(oc get cti "${cti_name}" -o=jsonpath='{.status.kubeconfig.name}')
+              mkdir -p /tmp/hyper-kubeconfig
+              oc extract secret/${SECRET_NAME} --to=/tmp/hyper-kubeconfig
 
-              res='{"result": "SUCCESS", "timestamp": "'$(date -u --iso-8601=seconds)'", '
-              res+='"successes": 0, "failures": 0, "warnings": 0, '
-              res+='"note": "I'"'"'m making a note here: huge success"}'
-              echo -n "${res}" | tee $(results.TEST_OUTPUT.path)
-              echo ""
+              ls -lah /tmp/hyper-kubeconfig
 
-              oc delete lease -n default konflux-integration-lock
+              export KUBECONFIG=/tmp/hyper-kubeconfig/kubeconfig
+
+              oc whoami
+              oc get namespaces
