@@ -130,16 +130,19 @@ spec:
               fi
 
               echo -n "${CTI_NAME}" > $(results.clusterName.path)
-    - name: check-cluster-connection
+    - name: bundle-deploy
       params:
         - name: clusterName
           value: $(tasks.provision-cluster.results.clusterName)
         - name: eaas-secretref
           value: $(tasks.provision-eaas-space.results.secretRef)
+        - name: SNAPSHOT
+          value: $(params.SNAPSHOT)
       taskSpec:
         params:
           - name: clusterName
           - name: eaas-secretref
+          - name: SNAPSHOT
         volumes:
           - name: eaas-kubeconfig
             secret:
@@ -149,6 +152,9 @@ spec:
             volumeMounts:
               - name: eaas-kubeconfig
                 mountPath: /tmp/eaas-kubeconfig
+            env:
+              - name: SNAPSHOT
+                value: $(params.SNAPSHOT)
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
@@ -161,9 +167,13 @@ spec:
               mkdir -p /tmp/hyper-kubeconfig
               oc extract secret/${SECRET_NAME} --to=/tmp/hyper-kubeconfig
 
-              ls -lah /tmp/hyper-kubeconfig
-
               export KUBECONFIG=/tmp/hyper-kubeconfig/kubeconfig
 
-              oc whoami
-              oc get namespaces
+              echo "Cloning multiclusterhub-operator repository"
+              dnf -y install git
+              git clone https://github.com/JustinKuli/multiclusterhub-operator.git
+              cd multiclusterhub-operator/
+              git checkout 2.11-integration-test
+              
+              cd hack/scripts
+              ./integration-setup.sh
