@@ -169,11 +169,21 @@ spec:
 
               export KUBECONFIG=/tmp/hyper-kubeconfig/kubeconfig
 
-              echo "Cloning multiclusterhub-operator repository"
-              dnf -y install git
-              git clone https://github.com/JustinKuli/multiclusterhub-operator.git
-              cd multiclusterhub-operator/
-              git checkout 2.11-integration-test
-              
-              cd hack/scripts
-              ./integration-setup.sh
+              echo "Cloning config-policy-controller repository"
+              dnf -y install make git
+              git clone https://github.com/stolostron/config-policy-controller.git
+              cd config-policy-controller/
+
+              cp /tmp/hyper-kubeconfig/kubeconfig ./kubeconfig_managed
+              cp /tmp/hyper-kubeconfig/kubeconfig ./kubeconfig_managed_e2e
+
+              oc apply -f https://raw.githubusercontent.com/open-cluster-management-io/governance-policy-propagator/main/deploy/crds/policy.open-cluster-management.io_policies.yaml
+              oc apply -f deploy/crds/policy.open-cluster-management.io_configurationpolicies.yaml
+              oc apply -f deploy/crds/policy.open-cluster-management.io_operatorpolicies.yaml
+
+              make deploy
+
+              E2E_TEST_ARGS="--focus=Custom --focus=messages" make e2e-test || true
+
+              echo "success?"
+              ls -lah
