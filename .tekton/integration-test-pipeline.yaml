@@ -170,7 +170,7 @@ spec:
               export KUBECONFIG=/tmp/hyper-kubeconfig/kubeconfig
 
               echo "Cloning config-policy-controller repository"
-              dnf -y install make git
+              dnf -y install make git go
               git clone https://github.com/stolostron/config-policy-controller.git
               cd config-policy-controller/
 
